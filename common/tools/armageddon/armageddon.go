@@ -667,7 +667,6 @@ func sendTxToRouters(userConfig *UserConfig, numOfTxs int, rate int, txSize int,
 func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFromPartyId int, receiveOutputDir string, expectedNumOfTxs int) {
 	serverRootCAs := append([][]byte{}, userConfig.TLSCACerts...)
 
-	// create a gRPC connection to the assembler
 	gRPCAssemblerClient := comm.ClientConfig{
 		KaOpts: comm.KeepaliveOptions{
 			ClientInterval: time.Hour,
@@ -689,11 +688,9 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 		os.Exit(3)
 	}
 
-	var stream ab.AtomicBroadcast_DeliverClient
-	var gRPCAssemblerClientConn *grpc.ClientConn
 	endpointToPullFrom := userConfig.AssemblerEndpoints[pullFromPartyId-1]
 
-	gRPCAssemblerClientConn, err = gRPCAssemblerClient.Dial(endpointToPullFrom)
+	gRPCAssemblerClientConn, err := gRPCAssemblerClient.Dial(endpointToPullFrom)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create a gRPC client connection to assembler %d: %v", pullFromPartyId, err)
 		os.Exit(3)
@@ -701,21 +698,18 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 
 	abc := ab.NewAtomicBroadcastClient(gRPCAssemblerClientConn)
 
-	// create a deliver stream
-	stream, err = abc.Deliver(context.TODO())
+	stream, err := abc.Deliver(context.TODO())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create a deliver stream to assembler %d: %v", pullFromPartyId, err)
 		os.Exit(3)
 	}
 
-	// send request envelope
 	err = stream.Send(requestEnvelope)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to send a request envelope to assembler %d: %v", pullFromPartyId, err)
 		os.Exit(3)
 	}
 
-	// pull blocks from assembler, every second pack statistics and send it to the manageStatistics
 	statisticsAggregator := &StatisticsAggregator{}
 
 	statisticChan := make(chan Statistics, 60)
@@ -735,14 +729,13 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 		waitToFinish.Done()
 	}()
 
-	// every second read the statistics and send it to the manageStatistics
+	// every second read the statistics and send it to manageStatistics
 	go func() {
 		ticker := time.NewTicker(timeIntervalToSampleStat)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				// send the accumulated statistics to the channel
 				lastStat := statisticsAggregator.ReadAndReset()
 				statisticChan <- lastStat
 			case <-stopChan:
@@ -752,16 +745,56 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 		}
 	}()
 
-	// pull blocks from the assembler
-	// if a flag is given, stop when finish receiving all txs
+	// pull blocks from the assembler with reconnect logic on failure
 	go func() {
 		logger.Infof("starting pulling blocks from the assembler")
 		var txsTotal int
+
 		for {
-			block, err := pullBlock(stream, endpointToPullFrom, gRPCAssemblerClientConn)
+			block, err := pullBlock(stream, endpointToPullFrom)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to pull block from assembler %d: %v", pullFromPartyId, err)
-				os.Exit(3)
+				// Assembler is down — log and retry, do NOT exit
+				logger.Warnf("lost connection to assembler %d: %v — will retry in 1s", pullFromPartyId, err)
+
+				_ = stream.CloseSend()
+				_ = gRPCAssemblerClientConn.Close()
+
+				// Keep retrying until reconnect succeeds
+				for {
+					time.Sleep(1 * time.Second)
+
+					gRPCAssemblerClientConn, err = gRPCAssemblerClient.Dial(endpointToPullFrom)
+					if err != nil {
+						logger.Warnf("reconnect to assembler %d failed: %v — retrying", pullFromPartyId, err)
+						continue
+					}
+
+					abc := ab.NewAtomicBroadcastClient(gRPCAssemblerClientConn)
+					stream, err = abc.Deliver(context.TODO())
+					if err != nil {
+						logger.Warnf("failed to create deliver stream to assembler %d: %v — retrying", pullFromPartyId, err)
+						_ = gRPCAssemblerClientConn.Close()
+						continue
+					}
+
+					requestEnvelope, err = createRequestEnvelopeForUser(userConfig)
+					if err != nil {
+						logger.Warnf("failed to recreate request envelope: %v — retrying", err)
+						_ = gRPCAssemblerClientConn.Close()
+						continue
+					}
+
+					err = stream.Send(requestEnvelope)
+					if err != nil {
+						logger.Warnf("failed to send request envelope to assembler %d: %v — retrying", pullFromPartyId, err)
+						_ = gRPCAssemblerClientConn.Close()
+						continue
+					}
+
+					logger.Infof("reconnected to assembler %d successfully", pullFromPartyId)
+					break
+				}
+				continue
 			}
 
 			if block.Header.Number == 0 {
@@ -775,10 +808,10 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 			blockChan <- blockWithTime
 			txsTotal += len(blockWithTime.block.Data.Data)
 
-			logger.Debugf("block with %d txs was pulled from the assembler, overall %d txs were received at this moment", len(blockWithTime.block.Data.Data), txsTotal)
+			logger.Debugf("block with %d txs pulled, overall %d txs received", len(blockWithTime.block.Data.Data), txsTotal)
 
 			if expectedNumOfTxs > 0 && expectedNumOfTxs <= txsTotal {
-				logger.Infof("overall %d txs were received, finished pulling", txsTotal)
+				logger.Infof("overall %d txs received, finished pulling", txsTotal)
 				waitToFinish.Done()
 				return
 			}
@@ -797,7 +830,6 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 			sumOfTxsSize = 0
 			txs = len(blockWithTime.block.Data.Data)
 			txsTotal += len(blockWithTime.block.Data.Data)
-			// iterate over txs in block
 			for j := 0; j < txs; j++ {
 				env, err := protoutil.GetEnvelopeFromBlock(blockWithTime.block.Data.Data[j])
 				if err != nil {
@@ -811,7 +843,6 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 				}
 				logger.Debugf("tx %x was received from the assembler", data)
 
-				// extract the tx size, sending time and calculate the delay, add the delay to sumOfDelayTimes
 				sumOfTxsSize += len(protoutil.MarshalOrPanic(env))
 				delay := calculateDelayOfTx(data, blockWithTime.acceptedTime)
 				sumOfDelayTimes = sumOfDelayTimes + delay.Seconds()
@@ -831,33 +862,30 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 	logger.Debugf("exit pulling blocks from the assembler")
 }
 
-func calculateDelayOfTx(data []byte, acceptedTime time.Time) time.Duration {
-	sendTime := tx.ExtractTimestampFromTx(data)
-	delayTime := acceptedTime.Sub(sendTime)
-	return delayTime
-}
-
-func pullBlock(stream ab.AtomicBroadcast_DeliverClient, endpointToPullFrom string, gRPCAssemblerClientConn *grpc.ClientConn) (*common.Block, error) {
+// pullBlock no longer closes the connection internally — the caller manages reconnection
+func pullBlock(stream ab.AtomicBroadcast_DeliverClient, endpointToPullFrom string) (*common.Block, error) {
 	resp, err := stream.Recv()
 	if err != nil {
-		return nil, fmt.Errorf("failed to receive a deliver response from %s", endpointToPullFrom)
+		return nil, fmt.Errorf("failed to receive a deliver response from %s: %w", endpointToPullFrom, err)
 	}
 
 	block := resp.GetBlock()
 
 	if block == nil {
-		stream.CloseSend()
-		gRPCAssemblerClientConn.Close()
-		return nil, fmt.Errorf("received a non block message from %s: %v", endpointToPullFrom, resp)
+		return nil, fmt.Errorf("received a non-block message from %s: %v", endpointToPullFrom, resp)
 	}
 
 	if block.Data == nil || len(block.Data.Data) == 0 {
-		stream.CloseSend()
-		gRPCAssemblerClientConn.Close()
 		return nil, fmt.Errorf("received empty block from %s", endpointToPullFrom)
 	}
 
 	return block, nil
+}
+
+func calculateDelayOfTx(data []byte, acceptedTime time.Time) time.Duration {
+	sendTime := tx.ExtractTimestampFromTx(data)
+	delayTime := acceptedTime.Sub(sendTime)
+	return delayTime
 }
 
 func sendTx(txsMap *protectedMap, streams []ab.AtomicBroadcast_BroadcastClient, i int, txSize int, sessionNumber []byte) {
@@ -893,7 +921,7 @@ func reportLoadResults(transactions int, elapsed time.Duration, txSize int) {
 func manageStatistics(receiveOutputDir string, statisticChan <-chan Statistics, stopChan <-chan bool, startTime float64, expectedTxs int, pullFrom int, timeIntervalToSampleStat time.Duration) {
 	filePath := path.Join(receiveOutputDir, "statistics.csv")
 	logger.Infof("Statistics are written to: %v\n", filePath)
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to open a csv file: %v", err)
 		os.Exit(3)
@@ -1059,7 +1087,7 @@ func receiveResponseFromAssembler(userConfig *UserConfig, txsMap *protectedMap, 
 	numOfTxsCalculated := 0
 	var sumOfDelayTimes float64
 	for {
-		block, err := pullBlock(stream, endpointToPullFrom, gRPCAssemblerClientConn)
+		block, err := pullBlock(stream, endpointToPullFrom)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to pull block from assembler %d: %v", pullFromPartyId, err)
 			os.Exit(3)
