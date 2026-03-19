@@ -667,6 +667,7 @@ func sendTxToRouters(userConfig *UserConfig, numOfTxs int, rate int, txSize int,
 func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFromPartyId int, receiveOutputDir string, expectedNumOfTxs int) {
 	serverRootCAs := append([][]byte{}, userConfig.TLSCACerts...)
 
+	// create a gRPC connection to the assembler
 	gRPCAssemblerClient := comm.ClientConfig{
 		KaOpts: comm.KeepaliveOptions{
 			ClientInterval: time.Hour,
@@ -698,18 +699,21 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 
 	abc := ab.NewAtomicBroadcastClient(gRPCAssemblerClientConn)
 
+	// create a deliver stream
 	stream, err := abc.Deliver(context.TODO())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create a deliver stream to assembler %d: %v", pullFromPartyId, err)
 		os.Exit(3)
 	}
 
+	// send request envelope
 	err = stream.Send(requestEnvelope)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to send a request envelope to assembler %d: %v", pullFromPartyId, err)
 		os.Exit(3)
 	}
 
+	// pull blocks from assembler, every second pack statistics and send it to the manageStatistics
 	statisticsAggregator := &StatisticsAggregator{}
 
 	statisticChan := make(chan Statistics, 60)
@@ -736,6 +740,7 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 		for {
 			select {
 			case <-ticker.C:
+				// send the accumulated statistics to the channel
 				lastStat := statisticsAggregator.ReadAndReset()
 				statisticChan <- lastStat
 			case <-stopChan:
@@ -751,8 +756,14 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 		var txsTotal int
 
 		for {
+			// TODO: it used to be this line, think in a bigger picture if the other parameter is still needed somehow.
+			//block, err := pullBlock(stream, endpointToPullFrom, gRPCAssemblerClientConn)
 			block, err := pullBlock(stream, endpointToPullFrom)
 			if err != nil {
+				// TODO: used to be this code, think if somehow it is still needed for other cases:
+				// fmt.Fprintf(os.Stderr, "failed to pull block from assembler %d: %v", pullFromPartyId, err)
+				// os.Exit(3)
+
 				// Assembler is down — log and retry, do NOT exit
 				logger.Warnf("lost connection to assembler %d: %v — will retry in 1s", pullFromPartyId, err)
 
@@ -808,10 +819,10 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 			blockChan <- blockWithTime
 			txsTotal += len(blockWithTime.block.Data.Data)
 
-			logger.Debugf("block with %d txs pulled, overall %d txs received", len(blockWithTime.block.Data.Data), txsTotal)
+			logger.Debugf("block with %d txs was pulled from the assembler, overall %d txs were received at this moment", len(blockWithTime.block.Data.Data), txsTotal)
 
 			if expectedNumOfTxs > 0 && expectedNumOfTxs <= txsTotal {
-				logger.Infof("overall %d txs received, finished pulling", txsTotal)
+				logger.Infof("overall %d txs were received, finished pulling", txsTotal)
 				waitToFinish.Done()
 				return
 			}
@@ -830,6 +841,7 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 			sumOfTxsSize = 0
 			txs = len(blockWithTime.block.Data.Data)
 			txsTotal += len(blockWithTime.block.Data.Data)
+			// iterate over txs in block
 			for j := 0; j < txs; j++ {
 				env, err := protoutil.GetEnvelopeFromBlock(blockWithTime.block.Data.Data[j])
 				if err != nil {
@@ -843,6 +855,7 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 				}
 				logger.Debugf("tx %x was received from the assembler", data)
 
+				// extract the tx size, sending time and calculate the delay, add the delay to sumOfDelayTimes
 				sumOfTxsSize += len(protoutil.MarshalOrPanic(env))
 				delay := calculateDelayOfTx(data, blockWithTime.acceptedTime)
 				sumOfDelayTimes = sumOfDelayTimes + delay.Seconds()
@@ -872,10 +885,16 @@ func pullBlock(stream ab.AtomicBroadcast_DeliverClient, endpointToPullFrom strin
 	block := resp.GetBlock()
 
 	if block == nil {
+		// TODO: used to have those two lines as well, think if they are needed:
+		// stream.CloseSend()
+		// gRPCAssemblerClientConn.Close()
 		return nil, fmt.Errorf("received a non-block message from %s: %v", endpointToPullFrom, resp)
 	}
 
 	if block.Data == nil || len(block.Data.Data) == 0 {
+		// TODO: used to have those two lines as well, think if they are needed:
+		// stream.CloseSend()
+		// gRPCAssemblerClientConn.Close()
 		return nil, fmt.Errorf("received empty block from %s", endpointToPullFrom)
 	}
 
@@ -1087,6 +1106,8 @@ func receiveResponseFromAssembler(userConfig *UserConfig, txsMap *protectedMap, 
 	numOfTxsCalculated := 0
 	var sumOfDelayTimes float64
 	for {
+		// TODO: used to be this line, think later if still needed:
+		//block, err := pullBlock(stream, endpointToPullFrom, gRPCAssemblerClientConn)
 		block, err := pullBlock(stream, endpointToPullFrom)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to pull block from assembler %d: %v", pullFromPartyId, err)
