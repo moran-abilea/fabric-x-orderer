@@ -754,6 +754,7 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 	go func() {
 		logger.Infof("starting pulling blocks from the assembler")
 		var txsTotal int
+		var lastBlockNum uint64 = 0
 
 		for {
 			// TODO: it used to be this line, think in a bigger picture if the other parameter is still needed somehow.
@@ -788,7 +789,9 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 						continue
 					}
 
-					requestEnvelope, err = createRequestEnvelopeForUser(userConfig)
+					// NOTE: save original line as well for now:
+					//requestEnvelope, err = createRequestEnvelopeForUser(userConfig)
+					requestEnvelope, err = createRequestEnvelopeForUserFromSeq(userConfig, lastBlockNum+1)
 					if err != nil {
 						logger.Warnf("failed to recreate request envelope: %v — retrying", err)
 						_ = gRPCAssemblerClientConn.Close()
@@ -802,7 +805,9 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 						continue
 					}
 
-					logger.Infof("reconnected to assembler %d successfully", pullFromPartyId)
+					// NOTE: save original line as well for now:
+					//logger.Infof("reconnected to assembler %d successfully", pullFromPartyId)
+					logger.Infof("reconnected to assembler %d successfully, resuming from block %d", pullFromPartyId, lastBlockNum+1)
 					break
 				}
 				continue
@@ -811,6 +816,8 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 			if block.Header.Number == 0 {
 				continue
 			}
+
+			lastBlockNum = block.Header.Number
 
 			blockWithTime := BlockWithTime{
 				block:        block,
@@ -1020,6 +1027,10 @@ func writeStatisticsToCSV(file *os.File, statistic Statistics, timeIntervalToSam
 }
 
 func createRequestEnvelopeForUser(userConfig *UserConfig) (*common.Envelope, error) {
+	return createRequestEnvelopeForUserFromSeq(userConfig, 0)
+}
+
+func createRequestEnvelopeForUserFromSeq(userConfig *UserConfig, startSeq uint64) (*common.Envelope, error) {
 	signer, err := signutil.CreateSignerForUser(userConfig.MSPDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create signer for user: %v", err)
@@ -1038,7 +1049,7 @@ func createRequestEnvelopeForUser(userConfig *UserConfig) (*common.Envelope, err
 		common.HeaderType_DELIVER_SEEK_INFO,
 		"arma",
 		signer,
-		nextSeekInfo(0),
+		nextSeekInfo(startSeq),
 		int32(0),
 		uint64(0),
 		tlsCertHash,
@@ -1046,6 +1057,35 @@ func createRequestEnvelopeForUser(userConfig *UserConfig) (*common.Envelope, err
 
 	return requestEnvelope, err
 }
+
+// NOTE: for now also keep the original code:
+// func createRequestEnvelopeForUser(userConfig *UserConfig) (*common.Envelope, error) {
+// 	signer, err := signutil.CreateSignerForUser(userConfig.MSPDir)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create signer for user: %v", err)
+// 	}
+
+// 	var tlsCertHash []byte
+// 	if userConfig.UseTLSAssembler == "mTLS" {
+// 		block, _ := pem.Decode(userConfig.TLSCertificate)
+// 		if block == nil || block.Type != "CERTIFICATE" {
+// 			return nil, fmt.Errorf("failed to decode PEM certificate")
+// 		}
+// 		tlsCertHash = util.ComputeSHA256(block.Bytes)
+// 	}
+
+// 	requestEnvelope, err := protoutil.CreateSignedEnvelopeWithTLSBinding(
+// 		common.HeaderType_DELIVER_SEEK_INFO,
+// 		"arma",
+// 		signer,
+// 		nextSeekInfo(0),
+// 		int32(0),
+// 		uint64(0),
+// 		tlsCertHash,
+// 	)
+
+// 	return requestEnvelope, err
+// }
 
 func receiveResponseFromAssembler(userConfig *UserConfig, txsMap *protectedMap, expectedNumOfTxs int) (int, float64) {
 	// arbitrarily choose the first assembler to pull blocks from
