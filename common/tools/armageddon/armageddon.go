@@ -830,9 +830,18 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 
 			if expectedNumOfTxs > 0 && expectedNumOfTxs <= txsTotal {
 				logger.Infof("overall %d txs were received, finished pulling", txsTotal)
+				_ = stream.CloseSend()
+				_ = gRPCAssemblerClientConn.Close()
 				waitToFinish.Done()
 				return
 			}
+
+			// NOTE: keep the older code for now as well:
+			// if expectedNumOfTxs > 0 && expectedNumOfTxs <= txsTotal {
+			// 	logger.Infof("overall %d txs were received, finished pulling", txsTotal)
+			// 	waitToFinish.Done()
+			// 	return
+			// }
 		}
 	}()
 
