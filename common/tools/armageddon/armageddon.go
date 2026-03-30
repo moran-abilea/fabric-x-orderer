@@ -757,14 +757,8 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 		var lastBlockNum uint64 = 0
 
 		for {
-			// TODO: it used to be this line, think in a bigger picture if the other parameter is still needed somehow.
-			//block, err := pullBlock(stream, endpointToPullFrom, gRPCAssemblerClientConn)
 			block, err := pullBlock(stream, endpointToPullFrom)
 			if err != nil {
-				// TODO: used to be this code, think if somehow it is still needed for other cases:
-				// fmt.Fprintf(os.Stderr, "failed to pull block from assembler %d: %v", pullFromPartyId, err)
-				// os.Exit(3)
-
 				// Assembler is down — log and retry, do NOT exit
 				logger.Warnf("lost connection to assembler %d: %v — will retry in 1s", pullFromPartyId, err)
 
@@ -789,8 +783,6 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 						continue
 					}
 
-					// NOTE: save original line as well for now:
-					//requestEnvelope, err = createRequestEnvelopeForUser(userConfig)
 					requestEnvelope, err = createRequestEnvelopeForUserFromSeq(userConfig, lastBlockNum+1)
 					if err != nil {
 						logger.Warnf("failed to recreate request envelope: %v — retrying", err)
@@ -805,8 +797,6 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 						continue
 					}
 
-					// NOTE: save original line as well for now:
-					//logger.Infof("reconnected to assembler %d successfully", pullFromPartyId)
 					logger.Infof("reconnected to assembler %d successfully, resuming from block %d", pullFromPartyId, lastBlockNum+1)
 					break
 				}
@@ -835,13 +825,6 @@ func pullBlocksFromAssemblerAndCollectStatistics(userConfig *UserConfig, pullFro
 				waitToFinish.Done()
 				return
 			}
-
-			// NOTE: keep the older code for now as well:
-			// if expectedNumOfTxs > 0 && expectedNumOfTxs <= txsTotal {
-			// 	logger.Infof("overall %d txs were received, finished pulling", txsTotal)
-			// 	waitToFinish.Done()
-			// 	return
-			// }
 		}
 	}()
 
@@ -901,16 +884,10 @@ func pullBlock(stream ab.AtomicBroadcast_DeliverClient, endpointToPullFrom strin
 	block := resp.GetBlock()
 
 	if block == nil {
-		// TODO: used to have those two lines as well, think if they are needed:
-		// stream.CloseSend()
-		// gRPCAssemblerClientConn.Close()
 		return nil, fmt.Errorf("received a non-block message from %s: %v", endpointToPullFrom, resp)
 	}
 
 	if block.Data == nil || len(block.Data.Data) == 0 {
-		// TODO: used to have those two lines as well, think if they are needed:
-		// stream.CloseSend()
-		// gRPCAssemblerClientConn.Close()
 		return nil, fmt.Errorf("received empty block from %s", endpointToPullFrom)
 	}
 
@@ -954,8 +931,6 @@ func reportLoadResults(transactions int, elapsed time.Duration, txSize int) {
 
 // manageStatistics manages a statistics queue and every hour writes the queue to a CSV file
 func manageStatistics(receiveOutputDir string, statisticChan <-chan Statistics, stopChan <-chan bool, startTime float64, expectedTxs int, pullFrom int, timeIntervalToSampleStat time.Duration) {
-	// NOTE: previous approach:
-	//filePath := path.Join(receiveOutputDir, "statistics.csv")
 	filePath := path.Join(receiveOutputDir, fmt.Sprintf("statistics_%s.csv", time.Now().Format("2006-01-02_15:04:05")))
 	logger.Infof("Statistics are written to: %v\n", filePath)
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
@@ -1069,35 +1044,9 @@ func createRequestEnvelopeForUserFromSeq(userConfig *UserConfig, startSeq uint64
 	return requestEnvelope, err
 }
 
-// NOTE: for now also keep the original code:
-// func createRequestEnvelopeForUser(userConfig *UserConfig) (*common.Envelope, error) {
-// 	signer, err := signutil.CreateSignerForUser(userConfig.MSPDir)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create signer for user: %v", err)
-// 	}
-
-// 	var tlsCertHash []byte
-// 	if userConfig.UseTLSAssembler == "mTLS" {
-// 		block, _ := pem.Decode(userConfig.TLSCertificate)
-// 		if block == nil || block.Type != "CERTIFICATE" {
-// 			return nil, fmt.Errorf("failed to decode PEM certificate")
-// 		}
-// 		tlsCertHash = util.ComputeSHA256(block.Bytes)
-// 	}
-
-// 	requestEnvelope, err := protoutil.CreateSignedEnvelopeWithTLSBinding(
-// 		common.HeaderType_DELIVER_SEEK_INFO,
-// 		"arma",
-// 		signer,
-// 		nextSeekInfo(0),
-// 		int32(0),
-// 		uint64(0),
-// 		tlsCertHash,
-// 	)
-
-// 	return requestEnvelope, err
-// }
-
+// receiveResponseFromAssembler is used by the submit command, which is a short-lived operation.
+// Unlike pullBlocksFromAssemblerAndCollectStatistics, no reconnect logic is needed here —
+// if the assembler goes down during a submit run, it is correct to fail fast.
 func receiveResponseFromAssembler(userConfig *UserConfig, txsMap *protectedMap, expectedNumOfTxs int) (int, float64) {
 	// arbitrarily choose the first assembler to pull blocks from
 	pullFromPartyId := 1
@@ -1157,8 +1106,6 @@ func receiveResponseFromAssembler(userConfig *UserConfig, txsMap *protectedMap, 
 	numOfTxsCalculated := 0
 	var sumOfDelayTimes float64
 	for {
-		// TODO: used to be this line, think later if still needed:
-		//block, err := pullBlock(stream, endpointToPullFrom, gRPCAssemblerClientConn)
 		block, err := pullBlock(stream, endpointToPullFrom)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to pull block from assembler %d: %v", pullFromPartyId, err)
