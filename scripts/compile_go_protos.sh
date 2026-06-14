@@ -7,8 +7,9 @@
 
 proto_files="\
  node/protos/comm/communication.proto \
+ node/protos/state/state.proto \
+ node/protos/state/header.proto \
  node/comm/testdata/grpc/test.proto \
- config/protos/configuration.proto \
  common/ledger/blkstorage/storage.proto"
 
 

@@ -859,7 +859,7 @@ func (c *Consensus) Deliver(proposal smartbft_types.Proposal, signatures []smart
 	defer c.lock.Unlock()
 
 	c.Arma.Index(digests)
-	block := state.CreateBlockToAppendFromDecision(uint64(hdr.Num), proposal, signatures, c.PrevHash, uint64(c.decisionNumOfLastConfigBlock))
+	block := state.CreateBlockToAppendFromDecision(uint64(hdr.Num), proposal, signatures, c.PrevHash, uint64(hdr.DecisionNumOfLastConfigBlock))
 	c.Storage.Append(block)
 
 	// update state
@@ -1206,8 +1206,7 @@ func (c *Consensus) UpdateStateAndRuntimeConfig(block *common.Block) smartbft_ty
 			c.decisionNumOfLastConfigBlock = hdr.DecisionNumOfLastConfigBlock
 			c.lastConfigBlockNum = lastBlockNum
 			c.Logger.Infof("Synchronizer delivered consenter block: %d, which includes a fabric config block: %d; the consenter will soft stop.", block.GetHeader().Number, lastBlockNum)
-			// TODO dynamically apply the new config without stopping, or if not possible, stop and restart with the new config
-			go c.SoftStop()
+			go c.processNewConfigBlock(configBlock)
 		}
 	}
 

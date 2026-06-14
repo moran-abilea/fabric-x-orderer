@@ -49,12 +49,10 @@ type ConsenterSupport interface {
 	SharedConfig() channelconfig.Orderer
 
 	// WriteBlockSync commits a block to the ledger.
-	// TODO remove the encodedMetadataValue argument
-	WriteBlockSync(block *cb.Block, encodedMetadataValue []byte)
+	WriteBlockSync(block *cb.Block)
 
 	// WriteConfigBlock commits a block to the ledger, and applies the config update inside.
-	// TODO remove the encodedMetadataValue argument
-	WriteConfigBlock(block *cb.Block, encodedMetadataValue []byte)
+	WriteConfigBlock(block *cb.Block)
 }
 
 type BFTConfigGetter interface {
@@ -128,7 +126,7 @@ func newSynchronizer(
 			ClusterDialer:       clusterDialer,
 			LocalConfigCluster:  localConfigCluster,
 			BlockPullerFactory:  &HeightDetectorCreator{},
-			VerifierFactory:     &noopVerifierCreator{}, // TODO rewrite &verifierCreator{} and replace
+			VerifierFactory:     &ConsenterBlockVerifierCreator{},
 			BFTDelivererFactory: &bftDelivererCreator{},
 			Logger:              logger,
 		}
