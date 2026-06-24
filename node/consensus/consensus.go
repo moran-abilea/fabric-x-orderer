@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	smartbft_consensus "github.com/hyperledger-labs/SmartBFT/pkg/consensus"
 	smartbft_types "github.com/hyperledger-labs/SmartBFT/pkg/types"
@@ -134,8 +133,10 @@ func (c *Consensus) Start() error {
 		c.Logger.Panicf("failed to start operations subsystem: %s", err)
 		panic(err)
 	}
+	RegisterHealthCheckers(c)
 
 	c.Logger.Infof("Prometheus serving on URL: %s", operations.PrometheusMetricsServiceURL(c.opsSystem, c.Logger))
+	c.Logger.Infof("Health check serving on URL: %s", operations.HealthCheckServiceURL(c.opsSystem, c.Logger))
 	c.Metrics.StartMetricsTracker()
 	bft := c.BFT
 	c.lock.Unlock()
@@ -972,7 +973,6 @@ func (c *Consensus) ApplyConfig(lastBlock *common.Block) (bool, error) {
 	}
 
 	// TODO: wait for acks from router, batcher and assembler in my party before reconfig
-	time.Sleep(1 * time.Minute)
 	c.stopAndReconfigure(newConfig, lastBlock)
 	return false, nil
 }
@@ -1144,7 +1144,7 @@ func (c *Consensus) verifyAndClassifyRequest(request *protos.Request) (*protos.R
 		return nil, fmt.Errorf("request structure verification error: request has unsupported type %s", reqType)
 	}
 
-	configRequest, err := c.ConfigUpdateProposer.ProposeConfigUpdate(request, c.Config.Bundle, c.Signer, c.RequestVerifier)
+	configRequest, err := c.ConfigUpdateProposer.ProposeConfigUpdate(request, c.Config.Bundle, c.Signer, c.RequestVerifier, c.Config.BCCSP)
 	if err != nil {
 		return nil, fmt.Errorf("propose config update error: %s", err)
 	}
